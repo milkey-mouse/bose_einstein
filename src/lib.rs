@@ -6,36 +6,120 @@
 //! partitions. Most operations on [`Vec<T>`] are supported by [`Partition<T>`].
 //!
 //! **Partitions are sets, not lists:** within each partition, order is not
-//! necessarily preserved after operations that mutate the `Partition<T>` (e.g.
-//! push, pop, move). (One could say the elements of a [`Partition<T>`] obey
-//! [Bose-Einstein statistics](https://en.wikipedia.org/wiki/Bose%E2%80%93Einstein_statistics).)
+//! necessarily preserved. (One could say the elements of a [`Partition<T>`]
+//! obey [Bose-Einstein statistics](https://en.wikipedia.org/wiki/Bose%E2%80%93Einstein_statistics).)
 //!
 //! ## Examples
+//!
+//! ### Basic Usage
 //!
 //! ```rust
 //! use bose_einstein::Partition;
 //!
-//! // Create a partition and add elements
+//! // Create a partition and add elements to both sides
 //! let mut partition = Partition::new();
-//! partition.push_left(1);
-//! partition.push_left(2);
-//! partition.push_right(3);
+//! partition.push_left("apple");
+//! partition.push_left("banana");
+//! partition.push_right("cherry");
+//! partition.push_right("date");
+//!
+//! // Sort elements for predictable assertions
+//! // (remember: order is not preserved within partitions)
+//! partition.left_mut().sort();
+//! partition.right_mut().sort();
 //!
 //! // Access elements in each partition
-//! assert_eq!(partition.left().len(), 2);
-//! assert_eq!(partition.right().len(), 1);
+//! assert_eq!(partition.left(), &["apple", "banana"]);
+//! assert_eq!(partition.right(), &["cherry", "date"]);
 //!
 //! // Move elements between partitions
 //! let moved = partition.move_to_right();
-//! assert!(moved.is_some());
-//! assert_eq!(partition.left().len(), 1);
-//! assert_eq!(partition.right().len(), 2);
+//! assert!(moved == Some("apple") || moved == Some("banana"));
 //!
-//! // Drain all elements from the left partition to the right
-//! let elements: Vec<_> = partition.drain_to_right().collect();
-//! assert_eq!(elements.len(), 1);
+//! // Get both partitions at once with the convenient partitions() method
+//! let (left, right) = partition.partitions();
+//! assert_eq!(left.len(), 1);
+//! assert_eq!(right.len(), 3);
+//! ```
+//!
+//! ### Using Drain Operations
+//!
+//! ```rust
+//! use bose_einstein::Partition;
+//!
+//! let mut partition = Partition::new();
+//!
+//! // Add some task IDs to the pending (left) and completed (right) lists
+//! partition.push_left(101);
+//! partition.push_left(102);
+//! partition.push_left(103);
+//! partition.push_right(201);
+//! partition.push_right(202);
+//!
+//! // Process all pending tasks and move them to completed
+//! println!("Processing pending tasks:");
+//! for task_id in partition.drain_to_right() {
+//!     println!("Processing task {}", task_id);
+//!     // Tasks are moved to the right partition automatically
+//! }
+//!
+//! // All tasks are now in the completed list
 //! assert_eq!(partition.left().len(), 0);
-//! assert_eq!(partition.right().len(), 3);
+//! assert_eq!(partition.right().len(), 5);
+//!
+//! // We can also archive completed tasks by moving to left (in a real app)
+//! println!("Archiving old tasks:");
+//! for task_id in partition.drain_to_left().take(2) {
+//!     println!("Archiving task {}", task_id);
+//!     // Even when we only process some items, all move to the destination
+//! }
+//!
+//! // All tasks moved to the left (archived) partition
+//! assert_eq!(partition.left().len(), 5);
+//! assert_eq!(partition.right().len(), 0);
+//! ```
+//!
+//! ### Using With Custom Types
+//!
+//! ```rust
+//! use bose_einstein::Partition;
+//!
+//! // A simple task type for demonstration
+//! #[derive(Debug, Clone, Copy, PartialEq)]
+//! struct Task {
+//!     id: u32,
+//!     is_important: bool,
+//! }
+//!
+//! // Use partition to organize tasks by importance
+//! let mut tasks = Partition::new();
+//!
+//! // Add some important tasks to the left partition
+//! tasks.push_left(Task { id: 1, is_important: true });
+//! tasks.push_left(Task { id: 2, is_important: true });
+//!
+//! // Add some regular tasks to the right partition
+//! tasks.push_right(Task { id: 3, is_important: false });
+//! tasks.push_right(Task { id: 4, is_important: false });
+//!
+//! // Check that we have the correct number of tasks in each partition
+//! assert_eq!(tasks.left().len(), 2);
+//! assert_eq!(tasks.right().len(), 2);
+//!
+//! // We can move a task from important to regular
+//! let moved_task = tasks.move_to_right();
+//! assert!(moved_task.is_some());
+//! assert!(moved_task.unwrap().is_important); // Was in the important partition
+//!
+//! // Now we have one less important task
+//! assert_eq!(tasks.left().len(), 1);
+//! assert_eq!(tasks.right().len(), 3);
+//!
+//! // We can access and modify tasks in each partition
+//! // (In a real application we might use more sophisticated filtering)
+//! let contains_task1 = tasks.left().iter().any(|task| task.id == 1) ||
+//!                       tasks.right().iter().any(|task| task.id == 1);
+//! assert!(contains_task1, "Task 1 should be in either partition");
 //! ```
 #![no_std]
 
