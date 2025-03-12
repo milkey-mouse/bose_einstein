@@ -8,9 +8,6 @@ repository = "https://github.com/milkey-mouse/bose_einstein"
 license = "CC0-1.0"
 keywords = ["collection", "container", "data-structure", "partition", "no-std"]
 categories = ["data-structures", "no-std"]
-readme = "README.md"
-
-[dependencies]
 
 [dev-dependencies]
 rand = "0.8"
