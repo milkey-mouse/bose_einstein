@@ -11,3 +11,6 @@ categories = ["data-structures", "no-std"]
 readme = "README.md"
 
 [dependencies]
+
+[dev-dependencies]
+rand = "0.8"
