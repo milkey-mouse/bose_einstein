@@ -346,7 +346,18 @@ impl<T, A: Allocator> Partition<T, A> {
 }
 
 impl<T> Partition<T> {
-    /// Creates a new empty partition.
+    /// Constructs a new, empty `Partition<T>`.
+    ///
+    /// The partition will not allocate until elements are pushed onto it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    ///
+    /// # #[allow(unused_mut)]
+    /// let mut p: Partition<i32> = Partition::new();
+    /// ```
     pub const fn new() -> Self {
         Self {
             inner: Vec::new(),
@@ -355,6 +366,28 @@ impl<T> Partition<T> {
     }
 
     /// Constructs a new, empty `Partition<T>` with at least the specified capacity.
+    ///
+    /// The partition will be able to hold at least `capacity` elements without
+    /// reallocating. This method is allowed to allocate for more elements than
+    /// `capacity`. If `capacity` is zero, the partition will not allocate.
+    ///
+    /// It is important to note that although the returned partition has the
+    /// minimum *capacity* specified, the partition will have a zero *length*. For
+    /// an explanation of the difference between length and capacity, see
+    /// *[Capacity and reallocation]*.
+    ///
+    /// If it is important to know the exact allocated capacity of a
+    /// `Partition`, always use the [`capacity`] method after construction.
+    ///
+    /// For `Partition<T>` where `T` is a zero-sized type, there will be no
+    /// allocation and the capacity will always be `usize::MAX`.
+    ///
+    /// [Capacity and reallocation]: #capacity-and-reallocation
+    /// [`capacity`]: Partition::capacity
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX` bytes.
     ///
     /// # Examples
     ///
@@ -376,7 +409,15 @@ impl<T> Partition<T> {
 
     /// Decomposes a `Partition<T>` into its raw parts.
     ///
-    /// Returns the underlying vector and partition index.
+    /// Returns the raw pointer to the underlying data, the length of the vector (in
+    /// elements), and the partition index (in elements).
+    ///
+    /// After calling this function, the caller is responsible for the memory
+    /// previously managed by the `Partition`. The only way to do this is to convert
+    /// the raw parts back into a `Partition` with the [`from_raw_parts`] function,
+    /// allowing the destructor to perform the cleanup.
+    ///
+    /// [`from_raw_parts`]: Partition::from_raw_parts
     ///
     /// # Examples
     ///
@@ -395,6 +436,24 @@ impl<T> Partition<T> {
     }
 
     /// Creates a `Partition<T>` from raw parts.
+    ///
+    /// # Safety
+    ///
+    /// This is highly unsafe, due to the number of invariants that aren't
+    /// checked:
+    ///
+    /// * `vec` must have been allocated using the global allocator, such as via
+    ///   the [`alloc::alloc`] function.
+    /// * `partition` must be less than or equal to `vec.len()`.
+    ///
+    /// These requirements are always upheld by any `vec` created by standard
+    /// library functions like [`Vec::new`] or [`vec!`]. Other allocation sources
+    /// are allowed if the invariants are upheld.
+    ///
+    /// The ownership of `vec` is effectively transferred to the `Partition<T>` which
+    /// may then deallocate, reallocate or change the contents of memory pointed to by
+    /// the vector at will. Ensure that nothing else uses the vector after calling this
+    /// function.
     ///
     /// # Panics
     ///
@@ -438,7 +497,21 @@ impl<T> Partition<T> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `partition <= vec.len()`.
+    /// This is highly unsafe, due to the number of invariants that aren't
+    /// checked:
+    ///
+    /// * `vec` must have been allocated using the global allocator, such as via
+    ///   the [`alloc::alloc`] function.
+    /// * The caller must ensure that `partition <= vec.len()`.
+    ///
+    /// These requirements are always upheld by any `vec` created by standard
+    /// library functions like [`Vec::new`] or [`vec!`]. Other allocation sources
+    /// are allowed if the invariants are upheld.
+    ///
+    /// The ownership of `vec` is effectively transferred to the `Partition<T>` which
+    /// may then deallocate, reallocate or change the contents of memory pointed to by
+    /// the vector at will. Ensure that nothing else uses the vector after calling this
+    /// function.
     ///
     /// # Examples
     ///
@@ -502,7 +575,7 @@ impl<T> Partition<T> {
     /// Returns both partitions as a tuple of slices.
     ///
     /// This is a convenience method that returns both the left and right
-    /// partitions at once.
+    /// partitions at once as a tuple of immutable slices.
     ///
     /// # Examples
     ///
@@ -523,7 +596,8 @@ impl<T> Partition<T> {
     /// Returns both partitions as a tuple of mutable slices.
     ///
     /// This is a convenience method that returns both the left and right
-    /// partitions at once, allowing mutation of both sides simultaneously.
+    /// partitions at once as a tuple of mutable slices, allowing mutation of both
+    /// sides simultaneously.
     ///
     /// # Examples
     ///
@@ -569,7 +643,7 @@ impl<T> Partition<T> {
     /// assert_eq!(p.left(), &[1, 2]);
     /// ```
     pub fn left(&self) -> &[T] {
-        // sAFETY: self.partition <= self.inner.len()
+        // SAFETY: self.partition <= self.inner.len()
         unsafe { self.inner.get_unchecked(..self.partition) }
     }
 
@@ -592,7 +666,7 @@ impl<T> Partition<T> {
     /// assert_eq!(p.pop_left(), Some(2));
     /// ```
     pub fn left_mut(&mut self) -> &mut [T] {
-        // sAFETY: self.partition <= self.inner.len()
+        // SAFETY: self.partition <= self.inner.len()
         unsafe { self.inner.get_unchecked_mut(..self.partition) }
     }
 
@@ -613,7 +687,7 @@ impl<T> Partition<T> {
     /// assert_eq!(p.right(), &[3]);
     /// ```
     pub fn right(&self) -> &[T] {
-        // sAFETY: self.partition <= self.inner.len()
+        // SAFETY: self.partition <= self.inner.len()
         unsafe { self.inner.get_unchecked(self.partition..) }
     }
 
@@ -636,11 +710,15 @@ impl<T> Partition<T> {
     /// assert_eq!(p.pop_right(), Some(2));
     /// ```
     pub fn right_mut(&mut self) -> &mut [T] {
-        // sAFETY: self.partition <= self.inner.len()
+        // SAFETY: self.partition <= self.inner.len()
         unsafe { self.inner.get_unchecked_mut(self.partition..) }
     }
 
-    /// Pushes a value into the left partition.
+    /// Appends an element to the left partition.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX` bytes.
     ///
     /// # Examples
     ///
@@ -664,7 +742,8 @@ impl<T> Partition<T> {
         self.partition += 1;
     }
 
-    /// Removes and returns an element (if any) from the left partition.
+    /// Removes the last element from the left partition and returns it, or
+    /// [`None`] if it is empty.
     ///
     /// # Examples
     ///
@@ -686,11 +765,14 @@ impl<T> Partition<T> {
         }
     }
 
-    /// Removes the element at the specified index from the left partition
-    /// and returns it.
+    /// Removes an element from the left partition and returns it.
     ///
     /// The removed element is replaced by the last element of the left partition.
     /// This does not preserve ordering within the left partition, but is O(1).
+    ///
+    /// If you need to preserve the element order, you should copy the
+    /// left partition to a separate vector, remove the element, and insert
+    /// the modified vector back with `from_raw_parts`.
     ///
     /// # Panics
     ///
@@ -732,7 +814,11 @@ impl<T> Partition<T> {
         }
     }
 
-    /// Pushes a value into the right partition.
+    /// Appends an element to the right partition.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX` bytes.
     ///
     /// # Examples
     ///
@@ -749,7 +835,8 @@ impl<T> Partition<T> {
         self.inner.push(value);
     }
 
-    /// Removes and returns an element (if any) from the right partition.
+    /// Removes the last element from the right partition and returns it, or
+    /// [`None`] if it is empty.
     ///
     /// # Examples
     ///
@@ -769,11 +856,14 @@ impl<T> Partition<T> {
         }
     }
 
-    /// Removes the element at the specified index from the right partition
-    /// and returns it.
+    /// Removes an element from the right partition and returns it.
     ///
     /// The removed element is replaced by the last element of the right partition.
     /// This does not preserve ordering within the right partition, but is O(1).
+    ///
+    /// If you need to preserve the element order, you should copy the
+    /// right partition to a separate vector, remove the element, and insert
+    /// the modified vector back with `from_raw_parts`.
     ///
     /// # Panics
     ///
@@ -817,10 +907,16 @@ impl<T> Partition<T> {
         }
     }
 
-    /// Returns an iterator that drains all elements from the left partition.
+    /// Creates a draining iterator that removes the specified range in the left
+    /// partition and yields the removed items.
     ///
-    /// This is useful for efficiently consuming all elements on the left side
-    /// without deallocating the underlying storage.
+    /// Removes all elements in the left partition, leaving it empty.
+    /// The vector is not reallocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the starting point is greater than the end point or if
+    /// the end point is greater than the length of the vector.
     ///
     /// # Examples
     ///
@@ -845,10 +941,16 @@ impl<T> Partition<T> {
         self.inner.drain(0..old_partition)
     }
 
-    /// Returns an iterator that drains all elements from the right partition.
+    /// Creates a draining iterator that removes the specified range in the right
+    /// partition and yields the removed items.
     ///
-    /// This is useful for efficiently consuming all elements on the right side
-    /// without deallocating the underlying storage.
+    /// Removes all elements in the right partition, leaving it empty.
+    /// The vector is not reallocated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the starting point is greater than the end point or if
+    /// the end point is greater than the length of the vector.
     ///
     /// # Examples
     ///
@@ -869,7 +971,8 @@ impl<T> Partition<T> {
         self.inner.drain(self.partition..)
     }
 
-    /// Returns the total number of elements in the partition.
+    /// Returns the number of elements in the partition, also referred to
+    /// as its 'length'.
     ///
     /// This is the sum of the number of elements in the left and right partitions.
     ///
@@ -921,9 +1024,10 @@ impl<T> Partition<T> {
     /// Reserves capacity for at least `additional` more elements to be inserted
     /// into the partition.
     ///
-    /// The collection may reserve more space to avoid frequent reallocations.
-    /// After calling `reserve`, capacity will be greater than or equal to
-    /// `self.len() + additional`. Does nothing if capacity is already sufficient.
+    /// The collection may reserve more space to speculatively avoid
+    /// frequent reallocations. After calling `reserve`,
+    /// capacity will be greater than or equal to `self.len() + additional`.
+    /// Does nothing if capacity is already sufficient.
     ///
     /// # Panics
     ///
@@ -946,9 +1050,15 @@ impl<T> Partition<T> {
     /// be inserted into the partition.
     ///
     /// Unlike [`reserve`](Partition::reserve), this will not deliberately over-allocate
-    /// to avoid frequent reallocations. After calling `reserve_exact`, capacity will be
-    /// greater than or equal to `self.len() + additional`. Does nothing if the capacity
-    /// is already sufficient.
+    /// to speculatively avoid frequent allocations. After calling `reserve_exact`,
+    /// capacity will be greater than or equal to `self.len() + additional`.
+    /// Does nothing if the capacity is already sufficient.
+    ///
+    /// Note that the allocator may give the collection more space than it
+    /// requests. Therefore, capacity can not be relied upon to be precisely
+    /// minimal. Prefer [`reserve`] if future insertions are expected.
+    ///
+    /// [`reserve`]: Partition::reserve
     ///
     /// # Panics
     ///
@@ -969,8 +1079,12 @@ impl<T> Partition<T> {
 
     /// Shrinks the capacity of the partition as much as possible.
     ///
-    /// It will drop down as close as possible to the length but the allocator
-    /// may still inform the partition that there is space for a few more elements.
+    /// The behavior of this method depends on the allocator, which may either shrink the
+    /// vector in-place or reallocate. The resulting partition might still have some
+    /// excess capacity, just as is the case for [`with_capacity`]. See
+    /// [`Allocator::shrink`] for more details.
+    ///
+    /// [`with_capacity`]: Partition::with_capacity
     ///
     /// # Examples
     ///
@@ -1135,6 +1249,9 @@ impl<T> Partition<T> {
 
     /// Clears the partition, removing all values.
     ///
+    /// Note that this method has no effect on the allocated capacity
+    /// of the partition.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1157,8 +1274,8 @@ impl<T> Partition<T> {
     /// Retains only the elements in the left partition that satisfy the predicate.
     ///
     /// In other words, remove all elements `e` from the left partition such that
-    /// `f(&e)` returns `false`. This method operates in-place and preserves the
-    /// capacity.
+    /// `f(&e)` returns `false`. This method operates in place, visiting each element
+    /// in the left partition exactly once and preserving the capacity.
     ///
     /// # Examples
     ///
@@ -1230,8 +1347,8 @@ impl<T> Partition<T> {
     /// Retains only the elements in the right partition that satisfy the predicate.
     ///
     /// In other words, remove all elements `e` from the right partition such that
-    /// `f(&e)` returns `false`. This method operates in-place and preserves the
-    /// capacity.
+    /// `f(&e)` returns `false`. This method operates in place, visiting each element
+    /// in the right partition exactly once and preserves the capacity.
     ///
     /// # Examples
     ///
