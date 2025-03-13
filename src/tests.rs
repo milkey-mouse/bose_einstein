@@ -8,6 +8,83 @@ use core::ops::{Deref, DerefMut};
 use rand::prelude::*;
 use std::panic::AssertUnwindSafe;
 
+#[cfg(feature = "allocator_api")]
+use alloc::alloc::Global;
+
+#[cfg(feature = "allocator_api")]
+mod allocator_tests {
+    use super::*;
+
+    // Direct tests against the parent Partition implementation to test allocator-specific features
+    #[test]
+    fn test_new_in() {
+        let p: super::super::Partition<i32, Global> = super::super::Partition::new_in(Global);
+        assert_eq!(p.left(), &[]);
+        assert_eq!(p.right(), &[]);
+    }
+
+    #[test]
+    fn test_with_capacity_in() {
+        let capacity = 10;
+        let p: super::super::Partition<i32, Global> =
+            super::super::Partition::with_capacity_in(capacity, Global);
+        assert_eq!(p.left(), &[]);
+        assert_eq!(p.right(), &[]);
+        assert!(p.capacity() >= capacity);
+    }
+
+    #[test]
+    fn test_from_raw_parts_with_allocator() {
+        // Create a vector with the global allocator
+        let vec: Vec<i32, Global> = Vec::new_in(Global);
+
+        // Create a vector with items using the global allocator
+        let mut vec_with_items: Vec<i32, Global> = Vec::with_capacity_in(4, Global);
+        vec_with_items.push(1);
+        vec_with_items.push(2);
+        vec_with_items.push(3);
+        vec_with_items.push(4);
+
+        // Empty vector
+        let p = super::super::Partition::from_raw_parts(vec, 0);
+        assert_eq!(p.left(), &[]);
+        assert_eq!(p.right(), &[]);
+
+        // Vector with items
+        let p = super::super::Partition::from_raw_parts(vec_with_items, 2);
+        assert_eq!(p.left(), &[1, 2]);
+        assert_eq!(p.right(), &[3, 4]);
+    }
+
+    #[test]
+    fn test_from_raw_parts_unchecked_with_allocator() {
+        // Create a vector with items using the global allocator
+        let mut vec_with_items: Vec<i32, Global> = Vec::with_capacity_in(4, Global);
+        vec_with_items.push(1);
+        vec_with_items.push(2);
+        vec_with_items.push(3);
+        vec_with_items.push(4);
+
+        // Safe usage
+        let p = unsafe { super::super::Partition::from_raw_parts_unchecked(vec_with_items, 2) };
+        assert_eq!(p.left(), &[1, 2]);
+        assert_eq!(p.right(), &[3, 4]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_from_raw_parts_panic_with_allocator() {
+        // Create a vector with items using the global allocator
+        let mut vec: Vec<i32, Global> = Vec::with_capacity_in(3, Global);
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
+
+        // This should panic - partition index is out of bounds
+        let _p = super::super::Partition::from_raw_parts(vec, 4);
+    }
+}
+
 // Shadow the parent's Partition with our own that shuffles on mutation
 #[derive(Clone)]
 pub struct Partition<T>(super::Partition<T>);
@@ -138,12 +215,12 @@ fn test_with_capacity() {
 fn test_capacity() {
     let mut p: Partition<i32> = Partition::new();
     let initial_capacity = p.capacity();
-    
+
     // Add elements until we exceed the initial capacity
     for i in 0..initial_capacity + 10 {
         p.push_left(i as i32);
     }
-    
+
     // Capacity should have increased
     assert!(p.capacity() > initial_capacity);
 }
@@ -153,13 +230,13 @@ fn test_reserve() {
     let mut p: Partition<i32> = Partition::new();
     p.push_left(1);
     p.push_right(2);
-    
+
     let current_len = p.len();
     p.reserve(20);
-    
+
     // Capacity should be at least current length + 20
     assert!(p.capacity() >= current_len + 20);
-    
+
     // Should still have the same elements
     check_set_equality(p.left().iter().copied(), [1]);
     check_set_equality(p.right().iter().copied(), [2]);
@@ -170,14 +247,14 @@ fn test_reserve_exact() {
     let mut p: Partition<i32> = Partition::new();
     p.push_left(1);
     p.push_right(2);
-    
+
     let current_len = p.len();
     let additional = 15;
     p.reserve_exact(additional);
-    
+
     // Capacity should be at least current length + additional
     assert!(p.capacity() >= current_len + additional);
-    
+
     // Should still have the same elements
     check_set_equality(p.left().iter().copied(), [1]);
     check_set_equality(p.right().iter().copied(), [2]);
@@ -187,21 +264,21 @@ fn test_reserve_exact() {
 fn test_shrink_to_fit() {
     // Create a partition with larger capacity
     let mut p: Partition<i32> = Partition::with_capacity(100);
-    
+
     // Add a few elements
     p.push_left(1);
     p.push_left(2);
     p.push_right(3);
-    
+
     // Verify we have excess capacity
     assert!(p.capacity() > 3);
-    
+
     // Shrink the capacity
     p.shrink_to_fit();
-    
+
     // Should still have at least enough for our elements
     assert!(p.capacity() >= 3);
-    
+
     // Original elements should be preserved
     assert_eq!(p.len(), 3);
     check_set_equality(p.left().iter().copied(), [1, 2]);
@@ -212,27 +289,27 @@ fn test_shrink_to_fit() {
 fn test_shrink_to() {
     // Create a partition with larger capacity
     let mut p: Partition<i32> = Partition::with_capacity(100);
-    
+
     // Add a few elements
     p.push_left(1);
     p.push_left(2);
     p.push_right(3);
-    
+
     // Verify we have excess capacity
     assert!(p.capacity() > 3);
-    
+
     // Shrink to a capacity of at most 10
     p.shrink_to(10);
-    
+
     // Should be between our length and the limit
     assert!(p.capacity() >= 3);
     assert!(p.capacity() <= 10);
-    
+
     // Original elements should be preserved
     assert_eq!(p.len(), 3);
     check_set_equality(p.left().iter().copied(), [1, 2]);
     check_set_equality(p.right().iter().copied(), [3]);
-    
+
     // Shrinking to less than length should still keep enough capacity for all elements
     p.shrink_to(2); // Our length is 3, so it should maintain capacity >= 3
     assert!(p.capacity() >= 3);
@@ -243,18 +320,18 @@ fn test_try_reserve() {
     let mut p: Partition<i32> = Partition::new();
     p.push_left(1);
     p.push_right(2);
-    
+
     // This should succeed for reasonable sizes
     let result = p.try_reserve(10);
     assert!(result.is_ok());
-    
+
     // After successful reservation, capacity should be increased
     assert!(p.capacity() >= p.len() + 10);
-    
+
     // Original elements should be preserved
     check_set_equality(p.left().iter().copied(), [1]);
     check_set_equality(p.right().iter().copied(), [2]);
-    
+
     // We don't test allocation failure cases since they're hard to reliably
     // trigger in a test environment
 }
@@ -264,14 +341,14 @@ fn test_try_reserve_exact() {
     let mut p: Partition<i32> = Partition::new();
     p.push_left(1);
     p.push_right(2);
-    
+
     // This should succeed for reasonable sizes
     let result = p.try_reserve_exact(10);
     assert!(result.is_ok());
-    
+
     // After successful reservation, capacity should be increased
     assert!(p.capacity() >= p.len() + 10);
-    
+
     // Original elements should be preserved
     check_set_equality(p.left().iter().copied(), [1]);
     check_set_equality(p.right().iter().copied(), [2]);
@@ -284,32 +361,38 @@ fn test_append() {
     p1.push_left(1);
     p1.push_left(2);
     p1.push_right(3);
-    
+
     let mut p2 = Partition::new();
     p2.push_left(4);
     p2.push_right(5);
     p2.push_right(6);
-    
+
     // Save the original lengths
     let p1_left_len = p1.left().len();
     let p1_right_len = p1.right().len();
     let p2_left_len = p2.left().len();
     let p2_right_len = p2.right().len();
-    
+
     // Append p2 to p1
     p1.append(&mut p2);
-    
+
     // Check that p1 has all elements from both
     assert_eq!(p1.left().len(), p1_left_len + p2_left_len);
     assert_eq!(p1.right().len(), p1_right_len + p2_right_len);
-    
+
     // Verify p1 contains all expected elements
     let left_contains_all = [1, 2, 4].iter().all(|&x| p1.left().contains(&x));
     let right_contains_all = [3, 5, 6].iter().all(|&x| p1.right().contains(&x));
-    
-    assert!(left_contains_all, "Left partition missing expected elements");
-    assert!(right_contains_all, "Right partition missing expected elements");
-    
+
+    assert!(
+        left_contains_all,
+        "Left partition missing expected elements"
+    );
+    assert!(
+        right_contains_all,
+        "Right partition missing expected elements"
+    );
+
     // Check that p2 is now empty
     assert!(p2.is_empty());
     assert_eq!(p2.left().len(), 0);
@@ -322,74 +405,80 @@ fn test_append_non_copy_types() {
     let mut p1 = Partition::new();
     p1.push_left("hello".to_string());
     p1.push_right("world".to_string());
-    
+
     let mut p2 = Partition::new();
     p2.push_left("foo".to_string());
     p2.push_right("bar".to_string());
-    
+
     // Append p2 to p1
     p1.append(&mut p2);
-    
+
     // Check lengths
     assert_eq!(p1.left().len(), 2);
     assert_eq!(p1.right().len(), 2);
-    
+
     // Check p2 is empty
     assert!(p2.is_empty());
-    
+
     // Check p1 contains all expected strings
-    let left_contains_all = p1.left().iter().any(|s| s == "hello") && 
-                           p1.left().iter().any(|s| s == "foo");
-    let right_contains_all = p1.right().iter().any(|s| s == "world") && 
-                            p1.right().iter().any(|s| s == "bar");
-    
-    assert!(left_contains_all, "Left partition missing expected elements");
-    assert!(right_contains_all, "Right partition missing expected elements");
+    let left_contains_all =
+        p1.left().iter().any(|s| s == "hello") && p1.left().iter().any(|s| s == "foo");
+    let right_contains_all =
+        p1.right().iter().any(|s| s == "world") && p1.right().iter().any(|s| s == "bar");
+
+    assert!(
+        left_contains_all,
+        "Left partition missing expected elements"
+    );
+    assert!(
+        right_contains_all,
+        "Right partition missing expected elements"
+    );
 }
 
 #[test]
 fn test_set_partition() {
     let mut p = Partition::new();
-    
+
     // Add some elements
     p.push_left(1);
     p.push_left(2);
     p.push_right(3);
     p.push_right(4);
-    
+
     // Verify initial state
     assert_eq!(p.left().len(), 2);
     assert_eq!(p.right().len(), 2);
-    
+
     // Move all elements to right partition
     unsafe {
         p.set_partition(0);
     }
-    
+
     // Verify new state
     assert_eq!(p.left().len(), 0);
     assert_eq!(p.right().len(), 4);
     check_set_equality(p.right().iter().copied(), [1, 2, 3, 4]);
-    
+
     // Move all elements to left partition
     unsafe {
         p.set_partition(4);
     }
-    
+
     // Verify new state
     assert_eq!(p.left().len(), 4);
     assert_eq!(p.right().len(), 0);
     check_set_equality(p.left().iter().copied(), [1, 2, 3, 4]);
-    
+
     // Move half the elements to right partition
     unsafe {
         p.set_partition(2);
     }
-    
+
     // Verify final state
     assert_eq!(p.left().len(), 2);
     assert_eq!(p.right().len(), 2);
-    
+
     // Test boundary case with empty vector
     let mut empty_p: Partition<i32> = Partition::new();
     unsafe {
@@ -397,17 +486,20 @@ fn test_set_partition() {
     }
     assert_eq!(empty_p.left().len(), 0);
     assert_eq!(empty_p.right().len(), 0);
-    
+
     // Test that out-of-bounds assertion works
     let mut p2 = Partition::new();
     p2.push_left(1);
-    
+
     let should_panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
         unsafe {
             p2.set_partition(2); // len is 1, so this is out of bounds
         }
     }));
-    assert!(should_panic.is_err(), "set_partition should panic with out-of-bounds index");
+    assert!(
+        should_panic.is_err(),
+        "set_partition should panic with out-of-bounds index"
+    );
 }
 
 #[test]
@@ -417,29 +509,32 @@ fn test_swap_remove_left() {
     p.push_left(2);
     p.push_left(3);
     p.push_right(4);
-    
+
     // Should have [1, 2, 3] in left partition
     assert_eq!(p.left().len(), 3);
-    
+
     // Remove the middle element
     let removed = p.swap_remove_left(1);
     assert!(removed == 1 || removed == 2 || removed == 3);
-    
+
     // Left should now have 2 elements and not contain the removed value
     assert_eq!(p.left().len(), 2);
     let left_elements: Vec<_> = p.left().to_vec();
     assert!(!left_elements.contains(&removed));
-    
+
     // Right partition should be unchanged
     assert_eq!(p.right().len(), 1);
     assert!(p.right().contains(&4));
-    
+
     // Try removing from an empty left partition
     let mut empty_p: Partition<i32> = Partition::new();
     let should_panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
         empty_p.swap_remove_left(0);
     }));
-    assert!(should_panic.is_err(), "swap_remove_left should panic with out-of-bounds index");
+    assert!(
+        should_panic.is_err(),
+        "swap_remove_left should panic with out-of-bounds index"
+    );
 }
 
 #[test]
@@ -449,35 +544,38 @@ fn test_swap_remove_right() {
     p.push_right(2);
     p.push_right(3);
     p.push_right(4);
-    
+
     // Should have [2, 3, 4] in right partition
     assert_eq!(p.right().len(), 3);
-    
+
     // Remove the first element in right partition (index 0 in right partition)
     let removed = p.swap_remove_right(0);
     assert!(removed == 2 || removed == 3 || removed == 4);
-    
+
     // Right should now have 2 elements and not contain the removed value
     assert_eq!(p.right().len(), 2);
     let right_elements: Vec<_> = p.right().to_vec();
     assert!(!right_elements.contains(&removed));
-    
+
     // Left partition should be unchanged
     assert_eq!(p.left().len(), 1);
     assert!(p.left().contains(&1));
-    
+
     // Try removing from an empty right partition
     let mut empty_p: Partition<i32> = Partition::new();
     let should_panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
         empty_p.swap_remove_right(0);
     }));
-    assert!(should_panic.is_err(), "swap_remove_right should panic with out-of-bounds index");
+    assert!(
+        should_panic.is_err(),
+        "swap_remove_right should panic with out-of-bounds index"
+    );
 }
 
 #[test]
 fn test_retain_left() {
     let mut p = Partition::new();
-    
+
     // Add a mix of even and odd numbers to both partitions
     for i in 1..=10 {
         if i <= 6 {
@@ -486,25 +584,36 @@ fn test_retain_left() {
             p.push_right(i);
         }
     }
-    
+
     // Retain only even numbers in the left partition
     p.retain_left(|&x| x % 2 == 0);
-    
+
     // Left partition should only have even numbers and be smaller
-    assert!(p.left().iter().all(|&x| x % 2 == 0), "Left partition should only contain even numbers");
-    assert_eq!(p.left().len(), 3, "Left should have exactly 3 elements (2,4,6)");
-    
+    assert!(
+        p.left().iter().all(|&x| x % 2 == 0),
+        "Left partition should only contain even numbers"
+    );
+    assert_eq!(
+        p.left().len(),
+        3,
+        "Left should have exactly 3 elements (2,4,6)"
+    );
+
     // Check that all expected values are there
     assert!(p.left().contains(&2));
     assert!(p.left().contains(&4));
     assert!(p.left().contains(&6));
-    
+
     // Right partition should be unchanged
     assert_eq!(p.right().len(), 4);
     for i in 7..=10 {
-        assert!(p.right().contains(&i), "Right partition missing element {}", i);
+        assert!(
+            p.right().contains(&i),
+            "Right partition missing element {}",
+            i
+        );
     }
-    
+
     // Test with empty left partition
     let mut empty_left = Partition::new();
     empty_left.push_right(1);
@@ -516,7 +625,7 @@ fn test_retain_left() {
 #[test]
 fn test_retain_right() {
     let mut p = Partition::new();
-    
+
     // Add a mix of even and odd numbers to both partitions
     for i in 1..=10 {
         if i <= 5 {
@@ -525,24 +634,31 @@ fn test_retain_right() {
             p.push_right(i);
         }
     }
-    
+
     // Retain only odd numbers in the right partition
     p.retain_right(|&x| x % 2 == 1);
-    
+
     // Right partition should only have odd numbers
-    assert!(p.right().iter().all(|&x| x % 2 == 1), "Right partition should only contain odd numbers");
-    
+    assert!(
+        p.right().iter().all(|&x| x % 2 == 1),
+        "Right partition should only contain odd numbers"
+    );
+
     // Right should have exactly 2 elements (7, 9)
     assert_eq!(p.right().len(), 2);
     assert!(p.right().contains(&7));
     assert!(p.right().contains(&9));
-    
+
     // Left partition should be unchanged
     assert_eq!(p.left().len(), 5);
     for i in 1..=5 {
-        assert!(p.left().contains(&i), "Left partition missing element {}", i);
+        assert!(
+            p.left().contains(&i),
+            "Left partition missing element {}",
+            i
+        );
     }
-    
+
     // Test with empty right partition
     let mut empty_right = Partition::new();
     empty_right.push_left(1);
@@ -558,21 +674,21 @@ fn test_retain_edge_cases() {
     p1.push_left(1);
     p1.push_left(2);
     p1.push_right(3);
-    
+
     p1.retain_left(|_| false);
     assert_eq!(p1.left().len(), 0);
     assert_eq!(p1.right().len(), 1);
-    
+
     // Test retaining everything
     let mut p2 = Partition::new();
     p2.push_left(1);
     p2.push_right(2);
     p2.push_right(3);
-    
+
     p2.retain_right(|_| true);
     assert_eq!(p2.left().len(), 1);
     assert_eq!(p2.right().len(), 2);
-    
+
     // Test complex retain that requires one of our more complex edge cases
     let mut p3 = Partition::new();
     for i in 1..=10 {
@@ -581,7 +697,7 @@ fn test_retain_edge_cases() {
     for i in 11..=20 {
         p3.push_right(i);
     }
-    
+
     // Retain only prime numbers in the left partition
     let is_prime = |&n: &i32| {
         if n <= 1 {
@@ -602,16 +718,16 @@ fn test_retain_edge_cases() {
         }
         true
     };
-    
+
     p3.retain_left(is_prime);
-    
+
     // Left should have primes: 2, 3, 5, 7
     assert_eq!(p3.left().len(), 4);
     assert!(p3.left().contains(&2));
     assert!(p3.left().contains(&3));
     assert!(p3.left().contains(&5));
     assert!(p3.left().contains(&7));
-    
+
     // Right should still have all original elements
     assert_eq!(p3.right().len(), 10);
     for i in 11..=20 {

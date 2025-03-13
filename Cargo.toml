@@ -11,3 +11,10 @@ categories = ["data-structures", "no-std"]
 
 [dev-dependencies]
 rand = "0.8"
+
+[features]
+default = ["allocator_api"]
+allocator_api = []
+
+[package.metadata.docs.rs]
+all-features = true

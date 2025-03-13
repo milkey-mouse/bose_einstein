@@ -127,12 +127,18 @@
 //! assert!(contains_task1, "Task 1 should be in either partition");
 //! ```
 #![cfg_attr(not(test), no_std)]
+#![cfg_attr(feature = "allocator_api", feature(allocator_api))]
 
 extern crate alloc;
 
-use alloc::vec::{self, Vec};
+use alloc::{
+    collections::TryReserveError,
+    vec::{self, Vec},
+};
 use core::{fmt, mem};
-use alloc::collections::TryReserveError;
+
+#[cfg(feature = "allocator_api")]
+use alloc::alloc::{Allocator, Global};
 
 /// A data structure that partitions elements into left and right sets.
 ///
@@ -156,7 +162,37 @@ use alloc::collections::TryReserveError;
 /// assert_eq!(p.left(), &[1, 2]);
 /// assert_eq!(p.right(), &[3]);
 /// ```
-#[derive(Clone, Default)]
+#[cfg(feature = "allocator_api")]
+#[derive(Clone)]
+pub struct Partition<T, A: Allocator = Global> {
+    inner: Vec<T, A>,
+    partition: usize,
+}
+
+/// A data structure that partitions elements into left and right sets.
+///
+/// Order within each set is not necessarily preserved after elements are added
+/// or removed. (One could say [`Partition<T>`] obeys
+/// [Bose-Einstein statistics](https://en.wikipedia.org/wiki/Bose%E2%80%93Einstein_statistics).)
+///
+/// # Examples
+///
+/// ```
+/// use bose_einstein::Partition;
+/// let mut p = Partition::new();
+/// p.push_left(1);
+/// p.push_left(2);
+/// p.push_right(3);
+///
+/// // order within partitions is not necessarily preserved, so sort before comparing
+/// p.left_mut().sort();
+/// p.right_mut().sort();
+///
+/// assert_eq!(p.left(), &[1, 2]);
+/// assert_eq!(p.right(), &[3]);
+/// ```
+#[cfg(not(feature = "allocator_api"))]
+#[derive(Clone)]
 pub struct Partition<T> {
     inner: Vec<T>,
     partition: usize,
@@ -171,16 +207,166 @@ impl<T: fmt::Debug> fmt::Debug for Partition<T> {
     }
 }
 
+impl<T> Default for Partition<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "allocator_api")]
+impl<T, A: Allocator> Partition<T, A> {
+    /// Constructs a new, empty `Partition<T, A>`. with the provided allocator.
+    ///
+    /// The partition will not allocate until elements are pushed onto it.
+    ///
+    /// This is an allocator-aware version of [`Partition::new()`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(allocator_api)]
+    /// extern crate alloc;
+    /// use bose_einstein::Partition;
+    ///
+    /// // Create a new partition with the global allocator
+    /// let p: Partition<usize, _> = Partition::new_in(alloc::alloc::Global);
+    /// assert!(p.is_empty());
+    /// ```
+    #[cfg(feature = "allocator_api")]
+    pub const fn new_in(alloc: A) -> Self {
+        Self {
+            inner: Vec::new_in(alloc),
+            partition: 0,
+        }
+    }
+
+    /// Constructs a new, empty `Partition<T, A>` with at least the specified
+    /// capacity with the provided allocator.
+    ///
+    /// The partition will be able to hold at least `capacity` elements without
+    /// reallocating. This method is allowed to allocate for more elements than
+    /// `capacity`. If `capacity` is zero, the partition will not allocate.
+    ///
+    /// If it is important to know the exact allocated capacity of a
+    /// `Partition`, always use the [`capacity`] method after construction.
+    ///
+    /// For `Partition<T, A>` where `T` is a zero-sized type, there will be no
+    /// allocation and the capacity will always be `usize::MAX`.
+    ///
+    /// This is an allocator-aware version of [`Partition::with_capacity()`].
+    ///
+    /// [`capacity`]: Partition::capacity
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds isize::MAX bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(allocator_api)]
+    /// extern crate alloc;
+    /// use bose_einstein::Partition;
+    ///
+    /// // Create a new partition with the global allocator and capacity
+    /// let p: Partition<usize, _> = Partition::with_capacity_in(10, alloc::alloc::Global);
+    /// assert!(p.capacity() >= 10);
+    /// assert!(p.is_empty());
+    /// ```
+    #[cfg(feature = "allocator_api")]
+    pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
+        Self {
+            inner: Vec::with_capacity_in(capacity, alloc),
+            partition: 0,
+        }
+    }
+
+    /// Creates a `Partition<T>` from raw parts.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `partition` is greater than `vec.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    /// // Create a partition from existing data
+    /// let vec = vec![1, 2, 3, 4];
+    /// let partition = 2; // First 2 elements will be in the left partition
+    ///
+    /// let p = Partition::from_raw_parts(vec, partition);
+    /// assert_eq!(p.left(), &[1, 2]);
+    /// assert_eq!(p.right(), &[3, 4]);
+    /// ```
+    ///
+    /// The function will panic if the partition index is invalid:
+    ///
+    /// ```should_panic
+    /// use bose_einstein::Partition;
+    /// let vec = vec![1, 2, 3];
+    /// let partition = 4; // Invalid: beyond the length of the vector
+    ///
+    /// // This will panic
+    /// let p = Partition::from_raw_parts(vec, partition);
+    /// ```
+    #[cfg(feature = "allocator_api")]
+    pub fn from_raw_parts(inner: Vec<T, A>, partition: usize) -> Self {
+        assert!(
+            partition <= inner.len(),
+            "partition index {partition} is out of bounds (vector len: {})",
+            inner.len()
+        );
+        unsafe { Self::from_raw_parts_unchecked(inner, partition) }
+    }
+
+    /// Creates a `Partition<T>` from raw parts without checking if the
+    /// partition index is valid.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `partition <= vec.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    /// // Safe usage: partition index is valid
+    /// let vec = vec![1, 2, 3, 4];
+    /// let partition = 2; // First 2 elements will be in the left partition
+    ///
+    /// let p = unsafe { Partition::from_raw_parts_unchecked(vec, partition) };
+    /// assert_eq!(p.left(), &[1, 2]);
+    /// assert_eq!(p.right(), &[3, 4]);
+    /// ```
+    #[cfg(feature = "allocator_api")]
+    pub unsafe fn from_raw_parts_unchecked(inner: Vec<T, A>, partition: usize) -> Self {
+        Self { inner, partition }
+    }
+}
+
 impl<T> Partition<T> {
     /// Creates a new empty partition.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             inner: Vec::new(),
             partition: 0,
         }
     }
 
-    /// Creates a new empty partition with at least the specified capacity.
+    /// Constructs a new, empty `Partition<T>` with at least the specified capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    ///
+    /// let p1: Partition<usize> = Partition::with_capacity(10);
+    /// assert!(p1.capacity() <= 10);
+    ///
+    /// let p2: Partition<()> = Partition::with_capacity(10);
+    /// assert_eq!(p2.capacity(), usize::MAX);
+    /// ```
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: Vec::with_capacity(capacity),
@@ -237,6 +423,7 @@ impl<T> Partition<T> {
     /// // This will panic
     /// let p = Partition::from_raw_parts(vec, partition);
     /// ```
+    #[cfg(not(feature = "allocator_api"))]
     pub fn from_raw_parts(inner: Vec<T>, partition: usize) -> Self {
         assert!(
             partition <= inner.len(),
@@ -265,6 +452,7 @@ impl<T> Partition<T> {
     /// assert_eq!(p.left(), &[1, 2]);
     /// assert_eq!(p.right(), &[3, 4]);
     /// ```
+    #[cfg(not(feature = "allocator_api"))]
     pub unsafe fn from_raw_parts_unchecked(inner: Vec<T>, partition: usize) -> Self {
         Self { inner, partition }
     }
@@ -307,7 +495,7 @@ impl<T> Partition<T> {
             new_partition,
             self.inner.len()
         );
-        
+
         self.partition = new_partition;
     }
 
@@ -497,7 +685,7 @@ impl<T> Partition<T> {
             None
         }
     }
-    
+
     /// Removes the element at the specified index from the left partition
     /// and returns it.
     ///
@@ -525,10 +713,12 @@ impl<T> Partition<T> {
     /// ```
     pub fn swap_remove_left(&mut self, index: usize) -> T {
         if index >= self.partition {
-            panic!("swap_remove_left: index {} out of bounds for left partition (length {})", 
-                   index, self.partition);
+            panic!(
+                "swap_remove_left: index {} out of bounds for left partition (length {})",
+                index, self.partition
+            );
         }
-        
+
         // If we're removing the last element (most common case with pop_left()),
         // we can optimize by decrementing partition and using swap_remove
         if index == self.partition - 1 {
@@ -578,7 +768,7 @@ impl<T> Partition<T> {
             None
         }
     }
-    
+
     /// Removes the element at the specified index from the right partition
     /// and returns it.
     ///
@@ -600,7 +790,7 @@ impl<T> Partition<T> {
     ///
     /// // Remove the first element in the right partition (index 0)
     /// assert_eq!(p.swap_remove_right(0), 1);
-    /// 
+    ///
     /// // The right partition now contains [3, 2] (or [2, 3])
     /// assert_eq!(p.right().len(), 2);
     /// assert!(p.right().contains(&2));
@@ -609,12 +799,15 @@ impl<T> Partition<T> {
     pub fn swap_remove_right(&mut self, index: usize) -> T {
         // The index is relative to the start of the right partition
         let absolute_index = self.partition + index;
-        
+
         if index >= self.right().len() {
-            panic!("swap_remove_right: index {} out of bounds for right partition (length {})", 
-                   index, self.right().len());
+            panic!(
+                "swap_remove_right: index {} out of bounds for right partition (length {})",
+                index,
+                self.right().len()
+            );
         }
-        
+
         // For the last element, we can just pop
         if absolute_index == self.inner.len() - 1 {
             self.inner.pop().unwrap()
@@ -710,7 +903,7 @@ impl<T> Partition<T> {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    
+
     /// Returns the total number of elements the partition can hold without
     /// reallocating.
     ///
@@ -718,13 +911,13 @@ impl<T> Partition<T> {
     ///
     /// ```
     /// use bose_einstein::Partition;
-    /// let p: Partition<i32> = Partition::with_capacity(10);
+    /// let p: Partition<usize> = Partition::with_capacity(10);
     /// assert!(p.capacity() >= 10);
     /// ```
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
-    
+
     /// Reserves capacity for at least `additional` more elements to be inserted
     /// into the partition.
     ///
@@ -748,7 +941,7 @@ impl<T> Partition<T> {
     pub fn reserve(&mut self, additional: usize) {
         self.inner.reserve(additional);
     }
-    
+
     /// Reserves the minimum capacity for at least `additional` more elements to
     /// be inserted into the partition.
     ///
@@ -773,7 +966,7 @@ impl<T> Partition<T> {
     pub fn reserve_exact(&mut self, additional: usize) {
         self.inner.reserve_exact(additional);
     }
-    
+
     /// Shrinks the capacity of the partition as much as possible.
     ///
     /// It will drop down as close as possible to the length but the allocator
@@ -792,7 +985,7 @@ impl<T> Partition<T> {
     pub fn shrink_to_fit(&mut self) {
         self.inner.shrink_to_fit();
     }
-    
+
     /// Shrinks the capacity of the partition with a lower bound.
     ///
     /// The capacity will remain at least as large as both the length
@@ -808,7 +1001,7 @@ impl<T> Partition<T> {
     /// p.push_left(1);
     /// p.push_left(2);
     /// p.push_right(3);
-    /// 
+    ///
     /// // Shrink to at most 10 elements
     /// p.shrink_to(10);
     /// assert!(p.capacity() >= 3);
@@ -822,7 +1015,7 @@ impl<T> Partition<T> {
     pub fn shrink_to(&mut self, min_capacity: usize) {
         self.inner.shrink_to(min_capacity);
     }
-    
+
     /// Tries to reserve capacity for at least `additional` more elements to be inserted
     /// into the partition.
     ///
@@ -843,7 +1036,7 @@ impl<T> Partition<T> {
     /// let mut p = Partition::new();
     /// p.push_left(1);
     /// p.push_right(2);
-    /// 
+    ///
     /// // Reserve space for 10 more elements
     /// match p.try_reserve(10) {
     ///     Ok(()) => println!("Reservation successful"),
@@ -853,11 +1046,11 @@ impl<T> Partition<T> {
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.inner.try_reserve(additional)
     }
-    
+
     /// Tries to reserve the minimum capacity for at least `additional` more elements
     /// to be inserted into the partition.
     ///
-    /// Unlike [`try_reserve`](Partition::try_reserve), this will not deliberately 
+    /// Unlike [`try_reserve`](Partition::try_reserve), this will not deliberately
     /// over-allocate to avoid frequent reallocations. After calling `try_reserve_exact`,
     /// capacity will be greater than or equal to `self.len() + additional` if it returns
     /// `Ok(())`. Does nothing if the capacity is already sufficient.
@@ -873,7 +1066,7 @@ impl<T> Partition<T> {
     /// use bose_einstein::Partition;
     /// let mut p = Partition::new();
     /// p.push_left(1);
-    /// 
+    ///
     /// // Reserve exact space for 10 more elements
     /// match p.try_reserve_exact(10) {
     ///     Ok(()) => println!("Reservation successful"),
@@ -883,7 +1076,7 @@ impl<T> Partition<T> {
     pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.inner.try_reserve_exact(additional)
     }
-    
+
     /// Moves all the elements of `other` into this `Partition`, leaving `other` empty.
     ///
     /// Elements from `other.left()` are added to `self.left()` and elements from
@@ -921,19 +1114,19 @@ impl<T> Partition<T> {
     pub fn append(&mut self, other: &mut Self) {
         // Reserve capacity for all elements at once
         self.reserve(other.len());
-        
+
         // Move elements from other.left() to self.left() (drain to avoid clone)
         let left_elements = other.drain_left();
         for element in left_elements {
             self.push_left(element);
         }
-        
+
         // Move elements from other.right() to self.right()
         let right_elements = other.drain_right();
         for element in right_elements {
             self.push_right(element);
         }
-        
+
         // The other partition should now be empty
         debug_assert!(other.is_empty());
         debug_assert_eq!(other.left().len(), 0);
@@ -960,7 +1153,7 @@ impl<T> Partition<T> {
         self.inner.clear();
         self.partition = 0;
     }
-    
+
     /// Retains only the elements in the left partition that satisfy the predicate.
     ///
     /// In other words, remove all elements `e` from the left partition such that
@@ -994,10 +1187,10 @@ impl<T> Partition<T> {
         if self.partition == 0 {
             return; // Nothing to do
         }
-        
+
         // Use a two-pointer approach to track elements that should be kept
         let mut keep_idx = 0;
-        
+
         // Iterate through elements in the left partition
         for i in 0..self.partition {
             // Keep elements that satisfy the predicate
@@ -1009,31 +1202,31 @@ impl<T> Partition<T> {
                 keep_idx += 1;
             }
         }
-        
+
         // If we kept fewer elements than we had, move right partition elements accordingly
         if keep_idx < self.partition {
             // Determine how many elements we're removing
             let removed = self.partition - keep_idx;
-            
+
             // Move elements from the right partition to fill the gap
             for i in 0..self.right().len() {
                 let right_idx = self.partition + i;
                 let new_idx = keep_idx + i;
-                
+
                 if right_idx != new_idx {
                     // Only swap if indices are different
                     self.inner.swap(right_idx, new_idx);
                 }
             }
-            
+
             // Update partition index
             self.partition = keep_idx;
-            
+
             // Truncate the vector to the new size
             self.inner.truncate(self.inner.len() - removed);
         }
     }
-    
+
     /// Retains only the elements in the right partition that satisfy the predicate.
     ///
     /// In other words, remove all elements `e` from the right partition such that
@@ -1067,12 +1260,12 @@ impl<T> Partition<T> {
         if self.partition >= self.inner.len() {
             return; // Nothing to do
         }
-        
+
         // Use regular Vec::retain for the right partition
         // First, create a view of the right partition
         let right_len = self.inner.len() - self.partition;
         let mut indices_to_remove = Vec::with_capacity(right_len);
-        
+
         // Find elements to remove
         for i in 0..right_len {
             let idx = self.partition + i;
@@ -1080,65 +1273,11 @@ impl<T> Partition<T> {
                 indices_to_remove.push(idx);
             }
         }
-        
+
         // Remove elements in reverse order to avoid index shifting
         for &idx in indices_to_remove.iter().rev() {
             self.inner.swap_remove(idx);
         }
-    }
-}
-
-/// A drain iterator that moves elements from the left to the right partition.
-pub struct DrainToRight<T: Copy> {
-    /// Elements from the left partition that will move to the right
-    elements: Vec<T>,
-    /// Current index in the elements vector
-    index: usize,
-}
-
-impl<T: Copy> Iterator for DrainToRight<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.elements.len() {
-            let val = self.elements[self.index];
-            self.index += 1;
-            Some(val)
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.elements.len() - self.index;
-        (remaining, Some(remaining))
-    }
-}
-
-/// A drain iterator that moves elements from the right to the left partition.
-pub struct DrainToLeft<T: Copy> {
-    /// Elements from the right partition that will move to the left
-    elements: Vec<T>,
-    /// Current index in the elements vector
-    index: usize,
-}
-
-impl<T: Copy> Iterator for DrainToLeft<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.elements.len() {
-            let val = self.elements[self.index];
-            self.index += 1;
-            Some(val)
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.elements.len() - self.index;
-        (remaining, Some(remaining))
     }
 }
 
@@ -1274,6 +1413,60 @@ impl<T: Copy> Partition<T> {
         }
 
         DrainToLeft { elements, index: 0 }
+    }
+}
+
+/// A drain iterator that moves elements from the left to the right partition.
+pub struct DrainToRight<T: Copy> {
+    /// Elements from the left partition that will move to the right
+    elements: Vec<T>,
+    /// Current index in the elements vector
+    index: usize,
+}
+
+impl<T: Copy> Iterator for DrainToRight<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.elements.len() {
+            let val = self.elements[self.index];
+            self.index += 1;
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.elements.len() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+/// A drain iterator that moves elements from the right to the left partition.
+pub struct DrainToLeft<T: Copy> {
+    /// Elements from the right partition that will move to the left
+    elements: Vec<T>,
+    /// Current index in the elements vector
+    index: usize,
+}
+
+impl<T: Copy> Iterator for DrainToLeft<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.elements.len() {
+            let val = self.elements[self.index];
+            self.index += 1;
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.elements.len() - self.index;
+        (remaining, Some(remaining))
     }
 }
 
