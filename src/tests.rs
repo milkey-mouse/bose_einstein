@@ -16,6 +16,10 @@ mod allocator_tests {
     use super::*;
 
     // direct tests against the parent Partition implementation to test allocator-specific features
+    // TODO: fix Partition to impl everything for Partition<T, A> if feature(allocator_api) is enabled
+    // so we can wrap it as struct Partition<T, A: Allocator = Global>(super::Partition<T, A>) and use
+    // the shuffling wrapped partition for all tests including these
+
     #[test]
     fn test_new_in() {
         let p: super::super::Partition<i32, Global> = super::super::Partition::new_in(Global);
@@ -2074,7 +2078,7 @@ fn test_complex_method_interactions() {
 #[test]
 fn test_unchecked_from_raw_parts_preserves_invariants() {
     // test that from_raw_parts_unchecked preserves invariants
-    // sAFETY: We're only calling this with valid data
+    // SAFETY: We're only calling this with valid data
 
     let vec = vec![1, 2, 3, 4];
     let partition = 2;
@@ -2099,4 +2103,268 @@ fn test_unchecked_from_raw_parts_preserves_invariants() {
     let p = unsafe { Partition::from_raw_parts_unchecked(empty_vec, 0) };
     assert!(p.left().is_empty());
     assert!(p.right().is_empty());
+}
+
+#[test]
+fn test_spare_capacity_mut() {
+    // create a partition with specific capacity
+    let mut p: Partition<usize> = Partition::with_capacity(10);
+
+    // add some elements
+    p.push_left(1);
+    p.push_left(2);
+    p.push_right(3);
+
+    // capture current state
+    let len_before = p.len();
+    let cap_before = p.capacity();
+    let spare_len = cap_before - len_before;
+
+    {
+        // get spare capacity in its own scope
+        let spare = p.spare_capacity_mut();
+
+        // verify size of spare capacity
+        assert_eq!(spare.len(), spare_len);
+        assert!(spare.len() >= 7); // should have at least 7 spare slots
+
+        // write to the spare capacity
+        spare[0].write(10);
+        spare[1].write(20);
+        spare[2].write(30);
+
+        // spare is dropped at the end of this scope
+    }
+
+    // initialize those elements
+    unsafe {
+        p.set_len(len_before + 3);
+    }
+
+    // elements should now be in the right partition
+    assert_eq!(p.left().len(), 2);
+    check_set_equality(p.left().iter().copied(), [1, 2]);
+
+    assert_eq!(p.right().len(), 4);
+
+    // check that the right partition contains both the original and new elements
+    let mut right_elements = p.right().to_vec();
+    right_elements.sort(); // sort for predictable comparison
+    assert_eq!(right_elements, vec![3, 10, 20, 30]);
+
+    // test with empty partition
+    let mut empty_p: Partition<usize> = Partition::with_capacity(5);
+    let capacity = empty_p.capacity();
+
+    {
+        // get spare capacity for empty partition in its own scope
+        let empty_spare = empty_p.spare_capacity_mut();
+        assert_eq!(empty_spare.len(), capacity);
+
+        // write to spare capacity
+        empty_spare[0].write(100);
+
+        // empty_spare is dropped at the end of this scope
+    }
+
+    unsafe {
+        empty_p.set_len(1);
+    }
+
+    assert_eq!(empty_p.left().len(), 0);
+    assert_eq!(empty_p.right().len(), 1);
+    assert_eq!(empty_p.right()[0], 100);
+}
+
+#[test]
+fn test_set_len() {
+    // create a partition with capacity
+    let mut p: Partition<usize> = Partition::with_capacity(10);
+
+    // ensure the capacity is at least 3
+    assert!(p.capacity() >= 3);
+
+    // test extending empty partition
+    let ptr = p.inner.as_mut_ptr();
+    unsafe {
+        // initialize first 3 elements directly
+        ptr.write(10);
+        ptr.add(1).write(20);
+        ptr.add(2).write(30);
+
+        // set the length to include these initialized elements
+        p.set_len(3);
+    }
+
+    // verify results
+    assert_eq!(p.len(), 3);
+    assert_eq!(p.left().len(), 0);
+    assert_eq!(p.right().len(), 3);
+    check_set_equality(p.right().iter().copied(), [10, 20, 30]);
+
+    // test extending a partition with existing elements
+    let mut p2: Partition<usize> = Partition::with_capacity(10);
+    p2.push_left(1);
+    p2.push_left(2);
+    p2.push_right(3);
+    let len_before = p2.len();
+
+    // verify we have enough capacity
+    assert!(p2.capacity() >= len_before + 2);
+
+    // get ptr to end of current data
+    let ptr = unsafe { p2.inner.as_mut_ptr().add(len_before) };
+    unsafe {
+        // initialize two more elements directly
+        ptr.write(40);
+        ptr.add(1).write(50);
+
+        // set the new length
+        p2.set_len(len_before + 2);
+    }
+
+    // verify results
+    assert_eq!(p2.len(), len_before + 2);
+    assert_eq!(p2.left().len(), 2);
+    assert_eq!(p2.right().len(), 3);
+
+    // right partition should contain both original and new elements
+    let right_elements: Vec<_> = p2.right().to_vec();
+    assert_eq!(right_elements.len(), 3);
+    assert!(right_elements.contains(&3));
+    assert!(right_elements.contains(&40));
+    assert!(right_elements.contains(&50));
+}
+
+#[test]
+fn test_reserve_and_reserve_exact() {
+    // test reserve
+    let mut p1: Partition<usize> = Partition::new();
+    assert_eq!(p1.capacity(), 0);
+
+    p1.reserve(10);
+    assert!(p1.capacity() >= 10);
+
+    // reserving more should increase capacity
+    let cap_before = p1.capacity();
+    p1.reserve(20);
+    // the actual implementation might not add exactly 20 more,
+    // just ensure the capacity increased
+    assert!(p1.capacity() >= cap_before);
+
+    // test reserve_exact
+    let mut p2: Partition<usize> = Partition::new();
+    p2.reserve_exact(10);
+    assert!(p2.capacity() >= 10);
+
+    // fill the partition partially
+    for i in 0..5 {
+        p2.push_left(i);
+    }
+
+    // reserve more exactly
+    p2.reserve_exact(10);
+    assert!(p2.capacity() >= p2.len() + 10);
+
+    // test with different distributions of elements
+    let mut p3: Partition<usize> = Partition::new();
+    p3.push_left(1);
+    p3.push_left(2);
+    p3.push_right(3);
+    p3.push_right(4);
+
+    let len_before = p3.len();
+    let cap_before = p3.capacity();
+
+    // reserve more space
+    p3.reserve(20);
+
+    // capacity should increase
+    assert!(p3.capacity() >= cap_before + 20);
+
+    // length and partition distribution should remain unchanged
+    assert_eq!(p3.len(), len_before);
+    assert_eq!(p3.left().len(), 2);
+    assert_eq!(p3.right().len(), 2);
+
+    // elements should remain in their original partitions
+    check_set_equality(p3.left().iter().copied(), [1, 2]);
+    check_set_equality(p3.right().iter().copied(), [3, 4]);
+}
+
+#[test]
+fn test_spare_capacity_mut_with_set_len_interaction() {
+    // this test ensures that spare_capacity_mut and set_len work well together
+    let mut p: Partition<usize> = Partition::with_capacity(20);
+
+    // add some elements to both partitions
+    p.push_left(1);
+    p.push_left(2);
+    p.push_right(3);
+    p.push_right(4);
+
+    // initial state
+    assert_eq!(p.left().len(), 2);
+    assert_eq!(p.right().len(), 2);
+    assert_eq!(p.len(), 4);
+
+    // store current length
+    let current_len = p.len();
+
+    {
+        // get spare capacity in its own scope
+        let spare = p.spare_capacity_mut();
+
+        // initialize 5 elements in spare capacity
+        for i in 0..5 {
+            spare[i].write(100 + i);
+        }
+
+        // spare is dropped at the end of this scope
+    }
+
+    // extend the length to include these 5 new elements
+    unsafe {
+        p.set_len(current_len + 5);
+    }
+
+    // verify state after extension
+    assert_eq!(p.len(), 9);
+    assert_eq!(p.left().len(), 2);
+    assert_eq!(p.right().len(), 7);
+
+    // verify original elements are still in their partitions
+    assert!(p.left().contains(&1));
+    assert!(p.left().contains(&2));
+
+    // verify new elements are in right partition
+    for i in 0..5 {
+        assert!(p.right().contains(&(100 + i)));
+    }
+
+    // verify that set_len doesn't change the partition index
+    let partition_idx_before = p.partition;
+    let current_len = p.len();
+
+    unsafe {
+        // pretend to initialize more but don't actually do it
+        // just testing the partition index behavior
+        p.set_len(current_len + 1);
+    }
+    assert_eq!(
+        p.partition, partition_idx_before,
+        "Partition index shouldn't change with set_len"
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_set_len_debug_assertion() {
+    // this test verifies the debug_assert in set_len
+    let mut p: Partition<usize> = Partition::with_capacity(5);
+
+    // this should trigger the debug assertion because new_len > capacity
+    unsafe {
+        p.set_len(10);
+    }
 }

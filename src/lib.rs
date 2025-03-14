@@ -1022,16 +1022,14 @@ impl<T> Partition<T> {
     }
 
     /// Reserves capacity for at least `additional` more elements to be inserted
-    /// into the partition.
-    ///
-    /// The collection may reserve more space to speculatively avoid
-    /// frequent reallocations. After calling `reserve`,
+    /// in the given `Partition<T>`. The collection may reserve more space to
+    /// speculatively avoid frequent reallocations. After calling `reserve`,
     /// capacity will be greater than or equal to `self.len() + additional`.
     /// Does nothing if capacity is already sufficient.
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds `isize::MAX` bytes.
+    /// Panics if the new capacity exceeds `isize::MAX` _bytes_.
     ///
     /// # Examples
     ///
@@ -1042,17 +1040,17 @@ impl<T> Partition<T> {
     /// p.reserve(10);
     /// assert!(p.capacity() >= 11);
     /// ```
+    #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.inner.reserve(additional);
     }
 
     /// Reserves the minimum capacity for at least `additional` more elements to
-    /// be inserted into the partition.
-    ///
-    /// Unlike [`reserve`](Partition::reserve), this will not deliberately over-allocate
-    /// to speculatively avoid frequent allocations. After calling `reserve_exact`,
-    /// capacity will be greater than or equal to `self.len() + additional`.
-    /// Does nothing if the capacity is already sufficient.
+    /// be inserted in the given `Partition<T>`. Unlike [`reserve`], this will
+    /// not deliberately over-allocate to speculatively avoid frequent
+    /// allocations. After calling `reserve_exact`, capacity will be greater
+    /// than or equal to `self.len() + additional`. Does nothing if the capacity
+    /// is already sufficient.
     ///
     /// Note that the allocator may give the collection more space than it
     /// requests. Therefore, capacity can not be relied upon to be precisely
@@ -1062,7 +1060,7 @@ impl<T> Partition<T> {
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds `isize::MAX` bytes.
+    /// Panics if the new capacity exceeds `isize::MAX` _bytes_.
     ///
     /// # Examples
     ///
@@ -1073,8 +1071,107 @@ impl<T> Partition<T> {
     /// p.reserve_exact(10);
     /// assert!(p.capacity() >= 11);
     /// ```
+    #[inline]
     pub fn reserve_exact(&mut self, additional: usize) {
         self.inner.reserve_exact(additional);
+    }
+
+    /// Returns the remaining spare capacity of the partition as a slice of
+    /// `MaybeUninit<T>`.
+    ///
+    /// The returned slice can be used to fill the partition with data before
+    /// marking the data as initialized using the [`set_len`] method.
+    ///
+    /// In the context of a partition, spare capacity is always at the end
+    /// of the underlying vector, which means the new elements will be
+    /// part of the right partition when initialized with [`set_len`].
+    ///
+    /// [`set_len`]: Partition::set_len
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    /// use core::mem::MaybeUninit;
+    ///
+    /// // allocate partition big enough for 10 elements
+    /// let mut p = Partition::with_capacity(10);
+    ///
+    /// // fill in the first 3 elements of spare capacity
+    /// let uninit = p.spare_capacity_mut();
+    /// uninit[0].write(0);
+    /// uninit[1].write(1);
+    /// uninit[2].write(2);
+    ///
+    /// // mark the first 3 elements of spare capacity as initialized
+    /// // this will add them to the right partition
+    /// unsafe {
+    ///     p.set_len(3);
+    /// }
+    ///
+    /// assert_eq!(p.left(), &[]);
+    /// assert_eq!(p.right(), &[0, 1, 2]);
+    /// ```
+    #[inline]
+    pub fn spare_capacity_mut(&mut self) -> &mut [mem::MaybeUninit<T>] {
+        self.inner.spare_capacity_mut()
+    }
+
+    /// Forces the length of the partition to `new_len`.
+    ///
+    /// This is a low-level operation that maintains none of the normal
+    /// invariants of the type. Normally changing the length of a partition
+    /// is done using methods like [`push_left`], [`push_right`], [`pop_left`],
+    /// [`pop_right`], or [`clear`].
+    ///
+    /// Since elements beyond the current length are added to the right partition,
+    /// this effectively adds elements to the right partition.
+    ///
+    /// [`push_left`]: Partition::push_left
+    /// [`push_right`]: Partition::push_right
+    /// [`pop_left`]: Partition::pop_left
+    /// [`pop_right`]: Partition::pop_right
+    /// [`clear`]: Partition::clear
+    ///
+    /// # Safety
+    ///
+    /// - `new_len` must be less than or equal to [`capacity()`].
+    /// - The elements at `old_len..new_len` must be initialized.
+    ///
+    /// [`capacity()`]: Partition::capacity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    /// use std::mem::MaybeUninit;
+    ///
+    /// // allocate partition big enough for 10 elements
+    /// let mut p = Partition::with_capacity(10);
+    ///
+    /// // get the spare capacity and initialize first 3 elements
+    /// let uninit = p.spare_capacity_mut();
+    /// uninit[0].write(10);
+    /// uninit[1].write(20);
+    /// uninit[2].write(30);
+    ///
+    /// // safely mark the first 3 elements as initialized
+    /// unsafe {
+    ///     p.set_len(3);
+    /// }
+    ///
+    /// // the initialized elements are now in the right partition
+    /// assert_eq!(p.left(), &[]);
+    /// assert_eq!(p.right(), &[10, 20, 30]);
+    /// ```
+    #[inline]
+    pub unsafe fn set_len(&mut self, new_len: usize) {
+        debug_assert!(new_len <= self.capacity());
+        // SAFETY: We're calling an unsafe function in an unsafe context,
+        // and we've verified the pre-condition that new_len <= capacity.
+        unsafe {
+            self.inner.set_len(new_len);
+        }
     }
 
     /// Shrinks the capacity of the partition as much as possible.
