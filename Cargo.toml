@@ -1,6 +1,6 @@
 [package]
 name = "bose_einstein"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Milkey Mouse <milkeymouse@meme.institute>"]
 description = "A data structure that efficiently partitions elements into two sets"
