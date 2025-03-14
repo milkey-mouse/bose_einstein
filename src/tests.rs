@@ -137,7 +137,7 @@ impl<T> Partition<T> {
 impl<T> DerefMut for Partition<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // shuffle both partitions unconditionally
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         self.0.left_mut().shuffle(&mut rng);
         self.0.right_mut().shuffle(&mut rng);
         &mut self.0

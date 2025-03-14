@@ -10,7 +10,7 @@ keywords = ["collection", "container", "data-structure", "partition", "no-std"]
 categories = ["data-structures", "no-std"]
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 
 [features]
 default = ["allocator_api"]
