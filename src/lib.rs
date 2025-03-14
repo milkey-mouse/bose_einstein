@@ -162,50 +162,32 @@ use alloc::alloc::{Allocator, Global};
 /// assert_eq!(p.left(), &[1, 2]);
 /// assert_eq!(p.right(), &[3]);
 /// ```
-#[cfg(feature = "allocator_api")]
 #[derive(Clone)]
-pub struct Partition<T, A: Allocator = Global> {
+pub struct Partition<T, #[cfg(feature = "allocator_api")] A: Allocator = Global> {
+    #[cfg(feature = "allocator_api")]
     inner: Vec<T, A>,
-    partition: usize,
-}
-
-/// A data structure that partitions elements into left and right sets.
-///
-/// Order within each set is not necessarily preserved after elements are added
-/// or removed. (One could say [`Partition<T>`] obeys
-/// [Bose-Einstein statistics](https://en.wikipedia.org/wiki/Bose%E2%80%93Einstein_statistics).)
-///
-/// # Examples
-///
-/// ```
-/// use bose_einstein::Partition;
-/// let mut p = Partition::new();
-/// p.push_left(1);
-/// p.push_left(2);
-/// p.push_right(3);
-///
-/// // order within partitions is not necessarily preserved, so sort before comparing
-/// p.left_mut().sort();
-/// p.right_mut().sort();
-///
-/// assert_eq!(p.left(), &[1, 2]);
-/// assert_eq!(p.right(), &[3]);
-/// ```
-#[cfg(not(feature = "allocator_api"))]
-#[derive(Clone)]
-pub struct Partition<T> {
+    #[cfg(not(feature = "allocator_api"))]
     inner: Vec<T>,
     partition: usize,
 }
 
-impl<T: fmt::Debug> fmt::Debug for Partition<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Partition")
-            .field("left", &self.left())
-            .field("right", &self.right())
-            .finish()
-    }
+macro_rules! impl_fmt_debug_for_partition {
+    ({$($impl_args:tt)*}, {$($struct_args:tt)*}) => {
+        impl<T: fmt::Debug, $($impl_args:tt)*> fmt::Debug for Partition<T, $($struct_args)*> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("Partition")
+                    .field("left", &self.left())
+                    .field("right", &self.right())
+                    .finish()
+            }
+        }
+    };
 }
+
+#[cfg(not(feature = "allocator_api"))]
+impl_fmt_debug_for_partition!({}, {});
+#[cfg(feature = "allocator_api")]
+impl_fmt_debug_for_partition!({A: Allocator}, {A});
 
 impl<T> Default for Partition<T> {
     fn default() -> Self {
@@ -232,7 +214,6 @@ impl<T, A: Allocator> Partition<T, A> {
     /// let p: Partition<usize, _> = Partition::new_in(alloc::alloc::Global);
     /// assert!(p.is_empty());
     /// ```
-    #[cfg(feature = "allocator_api")]
     pub const fn new_in(alloc: A) -> Self {
         Self {
             inner: Vec::new_in(alloc),
@@ -273,7 +254,6 @@ impl<T, A: Allocator> Partition<T, A> {
     /// assert!(p.capacity() >= 10);
     /// assert!(p.is_empty());
     /// ```
-    #[cfg(feature = "allocator_api")]
     pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
         Self {
             inner: Vec::with_capacity_in(capacity, alloc),
@@ -310,7 +290,6 @@ impl<T, A: Allocator> Partition<T, A> {
     /// // this will panic
     /// let p = Partition::from_raw_parts(vec, partition);
     /// ```
-    #[cfg(feature = "allocator_api")]
     pub fn from_raw_parts(inner: Vec<T, A>, partition: usize) -> Self {
         assert!(
             partition <= inner.len(),
@@ -339,13 +318,76 @@ impl<T, A: Allocator> Partition<T, A> {
     /// assert_eq!(p.left(), &[1, 2]);
     /// assert_eq!(p.right(), &[3, 4]);
     /// ```
-    #[cfg(feature = "allocator_api")]
     pub unsafe fn from_raw_parts_unchecked(inner: Vec<T, A>, partition: usize) -> Self {
         Self { inner, partition }
     }
 }
 
-impl<T> Partition<T> {
+impl<T, A: Allocator> Partition<T, A> {
+    /// Constructs a new, empty `Partition<T>`.
+
+    /// Creates an iterator that consumes the `Partition` and yields only the elements
+    /// from the left partition.
+    ///
+    /// This is useful when you want to consume only the left partition elements, for example
+    /// when the left partition contains initialized data and the right partition contains
+    /// uninitialized or no longer needed data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    ///
+    /// let mut p = Partition::new();
+    /// p.push_left(1);
+    /// p.push_left(2);
+    /// p.push_right(3);
+    ///
+    /// let left_elements: Vec<_> = p.into_iter_left().collect();
+    ///
+    /// // The left_elements vector contains all elements from the left partition
+    /// assert_eq!(left_elements.len(), 2);
+    /// assert!(left_elements.contains(&1));
+    /// assert!(left_elements.contains(&2));
+    /// ```
+    pub fn into_iter_left(self) -> Left<T> {
+        Left {
+            inner: self,
+            index: 0,
+        }
+    }
+
+    /// Creates an iterator that consumes the `Partition` and yields only the elements
+    /// from the right partition.
+    ///
+    /// This is useful when you want to consume only the right partition elements, for example
+    /// when the right partition contains processed data and the left partition contains
+    /// unprocessed or no longer needed data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bose_einstein::Partition;
+    ///
+    /// let mut p = Partition::new();
+    /// p.push_left(1);
+    /// p.push_right(2);
+    /// p.push_right(3);
+    ///
+    /// let right_elements: Vec<_> = p.into_iter_right().collect();
+    ///
+    /// // The right_elements vector contains all elements from the right partition
+    /// assert_eq!(right_elements.len(), 2);
+    /// assert!(right_elements.contains(&2));
+    /// assert!(right_elements.contains(&3));
+    /// ```
+    pub fn into_iter_right(self) -> Right<T> {
+        Right {
+            inner: self,
+            index: 0,
+        }
+    }
+
     /// Constructs a new, empty `Partition<T>`.
     ///
     /// The partition will not allocate until elements are pushed onto it.
@@ -1398,6 +1440,7 @@ impl<T> Partition<T> {
     }
 }
 
+// Methods only for types that implement Copy
 impl<T: Copy> Partition<T> {
     /// Moves an element (if any) from the right partition to the left.
     ///
@@ -1583,6 +1626,141 @@ impl<T: Copy> Iterator for DrainToLeft<T> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.elements.len() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+/// An iterator that yields elements from the left partition of a `Partition<T>`.
+///
+/// This iterator consumes the `Partition` and yields items from the left partition only.
+/// It is created by the [`into_iter_left`](Partition::into_iter_left) method.
+///
+/// # Examples
+///
+/// ```
+/// use bose_einstein::Partition;
+///
+/// let mut p = Partition::new();
+/// p.push_left(1);
+/// p.push_left(2);
+/// p.push_right(3);
+///
+/// // Iterate over just the left partition
+/// let left_items: Vec<_> = p.into_iter_left().collect();
+/// assert_eq!(left_items.len(), 2);
+/// assert!(left_items.contains(&1));
+/// assert!(left_items.contains(&2));
+/// ```
+pub struct Left<T, #[cfg(feature = "allocator_api")] A: Allocator = Global>(
+    #[cfg(feature = "allocator_api")] Partition<T, A>,
+    #[cfg(not(feature = "allocator_api"))] Partition<T>,
+);
+
+#[cfg(feature = "allocator_api")]
+impl<T, A: Allocator> Iterator for Left<T, A> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.inner.partition {
+            // Use Vec::remove to take ownership of the element without requiring T: Copy
+            // We need to adjust the partition index when removing elements
+            self.inner.partition -= 1;
+            Some(self.inner.inner.remove(self.index))
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.inner.partition - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+#[cfg(not(feature = "allocator_api"))]
+impl<T> Iterator for Left<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.inner.partition {
+            // Use Vec::remove to take ownership of the element without requiring T: Copy
+            // We need to adjust the partition index when removing elements
+            self.inner.partition -= 1;
+            Some(self.inner.inner.remove(self.index))
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.inner.partition - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+/// An iterator that yields elements from the right partition of a `Partition<T>`.
+///
+/// This iterator consumes the `Partition` and yields items from the right partition only.
+/// It is created by the [`into_iter_right`](Partition::into_iter_right) method.
+///
+/// # Examples
+///
+/// ```
+/// use bose_einstein::Partition;
+///
+/// let mut p = Partition::new();
+/// p.push_left(1);
+/// p.push_right(2);
+/// p.push_right(3);
+///
+/// // Iterate over just the right partition
+/// let right_items: Vec<_> = p.into_iter_right().collect();
+/// assert_eq!(right_items.len(), 2);
+/// assert!(right_items.contains(&2));
+/// assert!(right_items.contains(&3));
+/// ```
+pub struct Right<T, #[cfg(feature = "allocator_api")] A: Allocator = Global> {
+    #[cfg(feature = "allocator_api")]
+    inner: Partition<T, A>,
+    #[cfg(not(feature = "allocator_api"))]
+    inner: Partition<T>,
+    index: usize,
+}
+
+#[cfg(feature = "allocator_api")]
+impl<T, A: Allocator> Iterator for Right<T, A> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < (self.inner.inner.len() - self.inner.partition) {
+            // Remove the element at the partition index (first element in the right partition)
+            Some(self.inner.inner.remove(self.inner.partition))
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.inner.inner.len() - self.inner.partition - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+#[cfg(not(feature = "allocator_api"))]
+impl<T> Iterator for Right<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < (self.inner.inner.len() - self.inner.partition) {
+            // Remove the element at the partition index (first element in the right partition)
+            Some(self.inner.inner.remove(self.inner.partition))
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.inner.inner.len() - self.inner.partition - self.index;
         (remaining, Some(remaining))
     }
 }

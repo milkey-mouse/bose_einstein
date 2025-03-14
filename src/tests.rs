@@ -127,6 +127,15 @@ impl<T> Partition<T> {
         let (vec, partition) = self.0.to_raw_parts();
         (vec, partition)
     }
+
+    // Forward the into_iter methods to support our tests
+    pub fn into_iter_left(self) -> super::Left<T> {
+        self.0.into_iter_left()
+    }
+
+    pub fn into_iter_right(self) -> super::Right<T> {
+        self.0.into_iter_right()
+    }
 }
 
 // Implement DerefMut to shuffle on mutation
@@ -2099,4 +2108,154 @@ fn test_unchecked_from_raw_parts_preserves_invariants() {
     let p = unsafe { Partition::from_raw_parts_unchecked(empty_vec, 0) };
     assert!(p.left().is_empty());
     assert!(p.right().is_empty());
+}
+
+#[test]
+fn test_into_iter_left() {
+    let mut p = Partition::new();
+    p.push_left(1);
+    p.push_left(2);
+    p.push_right(3);
+    p.push_right(4);
+
+    // Collect elements from the left partition
+    let left_items: Vec<_> = p.into_iter_left().collect();
+
+    // Should have exactly 2 items
+    assert_eq!(left_items.len(), 2);
+
+    // Should contain both items from the left partition
+    assert!(left_items.contains(&1));
+    assert!(left_items.contains(&2));
+
+    // Should not contain items from the right partition
+    assert!(!left_items.contains(&3));
+    assert!(!left_items.contains(&4));
+}
+
+#[test]
+fn test_into_iter_right() {
+    let mut p = Partition::new();
+    p.push_left(1);
+    p.push_left(2);
+    p.push_right(3);
+    p.push_right(4);
+
+    // Collect elements from the right partition
+    let right_items: Vec<_> = p.into_iter_right().collect();
+
+    // Should have exactly 2 items
+    assert_eq!(right_items.len(), 2);
+
+    // Should contain both items from the right partition
+    assert!(right_items.contains(&3));
+    assert!(right_items.contains(&4));
+
+    // Should not contain items from the left partition
+    assert!(!right_items.contains(&1));
+    assert!(!right_items.contains(&2));
+}
+
+#[test]
+fn test_into_iter_left_empty() {
+    // Test with empty left partition
+    let mut p = Partition::new();
+    p.push_right(1);
+    p.push_right(2);
+
+    let left_items: Vec<_> = p.into_iter_left().collect();
+    assert_eq!(left_items.len(), 0);
+}
+
+#[test]
+fn test_into_iter_right_empty() {
+    // Test with empty right partition
+    let mut p = Partition::new();
+    p.push_left(1);
+    p.push_left(2);
+
+    let right_items: Vec<_> = p.into_iter_right().collect();
+    assert_eq!(right_items.len(), 0);
+}
+
+#[test]
+fn test_into_iter_left_size_hint() {
+    let mut p = Partition::new();
+    p.push_left(1);
+    p.push_left(2);
+    p.push_left(3);
+
+    let mut iter = p.into_iter_left();
+
+    // Initially, size_hint should show 3 elements
+    assert_eq!(iter.size_hint(), (3, Some(3)));
+
+    // After taking one element, size_hint should show 2 elements
+    iter.next();
+    assert_eq!(iter.size_hint(), (2, Some(2)));
+
+    // After taking two elements, size_hint should show 1 element
+    iter.next();
+    assert_eq!(iter.size_hint(), (1, Some(1)));
+
+    // After taking all elements, size_hint should show 0 elements
+    iter.next();
+    assert_eq!(iter.size_hint(), (0, Some(0)));
+}
+
+#[test]
+fn test_into_iter_right_size_hint() {
+    let mut p = Partition::new();
+    p.push_right(1);
+    p.push_right(2);
+    p.push_right(3);
+
+    let mut iter = p.into_iter_right();
+
+    // Initially, size_hint should show 3 elements
+    assert_eq!(iter.size_hint(), (3, Some(3)));
+
+    // After taking one element, size_hint should show 2 elements
+    iter.next();
+    assert_eq!(iter.size_hint(), (2, Some(2)));
+
+    // After taking two elements, size_hint should show 1 element
+    iter.next();
+    assert_eq!(iter.size_hint(), (1, Some(1)));
+
+    // After taking all elements, size_hint should show 0 elements
+    iter.next();
+    assert_eq!(iter.size_hint(), (0, Some(0)));
+}
+
+#[test]
+fn test_into_iter_left_non_copy_type() {
+    // Test with a non-Copy type like String
+    let mut p = Partition::new();
+    p.push_left("hello".to_string());
+    p.push_left("world".to_string());
+    p.push_right("test".to_string());
+
+    let left_items: Vec<_> = p.into_iter_left().collect();
+
+    assert_eq!(left_items.len(), 2);
+    assert!(left_items.iter().any(|s| s == "hello"));
+    assert!(left_items.iter().any(|s| s == "world"));
+    assert!(!left_items.iter().any(|s| s == "test"));
+}
+
+#[test]
+fn test_into_iter_right_non_copy_type() {
+    // Test with a non-Copy type like String
+    let mut p = Partition::new();
+    p.push_left("hello".to_string());
+    p.push_right("world".to_string());
+    p.push_right("test".to_string());
+
+    let right_items: Vec<_> = p.into_iter_right().collect();
+
+    assert_eq!(right_items.len(), 2);
+    assert!(right_items.iter().any(|s| s == "world"));
+    assert!(right_items.iter().any(|s| s == "test"));
+    assert!(!right_items.iter().any(|s| s == "hello"));
 }

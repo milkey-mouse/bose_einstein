@@ -755,7 +755,7 @@ This trait allows creating a collection from an iterator. For Partition, this wo
 **EXISTS?** ❌  
 **ADD?** High  
 
-This trait allows using a collection in for loops. Partition should implement this, iterating over both partitions in sequence. High priority as it's a fundamental trait for collections.
+This trait allows using a collection in for loops. However, for Partition there's an ambiguity about which partition should be iterated over. Instead of implementing `IntoIterator` directly on `Partition<T>`, we should provide wrapper types like `Left<T>` and `Right<T>` with methods `into_iter_left()` and `into_iter_right()` that make it explicit which partition is being consumed. This approach also aligns with common use cases where one partition contains initialized data and the other contains uninitialized/freed data. High priority as these are fundamental operations for collections.
 
 ### `Extend`
 
